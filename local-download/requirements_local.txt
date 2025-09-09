@@ -1,0 +1,4 @@
+# Requirements for local OpenAI Compliance API download script
+# Install with: pip install -r requirements_local.txt
+
+requests==2.31.0

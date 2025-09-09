@@ -1,0 +1,82 @@
+# Environment files with sensitive data
+*.env
+*.env.local
+.env
+.env.local
+
+# Local configuration files
+local_config.env
+local_config.env.local
+
+# Data directories and files
+downloads/
+.download_state.json
+compliance_download.log
+
+# AWS Lambda deployment packages
+lambda-deployment-package.zip
+*.zip
+
+# Python cache and temporary files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# AWS credentials and config
+.aws/
+aws-credentials
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# State files
+*.state
+*.backup

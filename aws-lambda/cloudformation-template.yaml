@@ -1,0 +1,227 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'OpenAI Compliance API Daily Backup Infrastructure'
+
+Parameters:
+  OpenAIAPIKey:
+    Type: String
+    Description: 'OpenAI API Key'
+    NoEcho: true
+  
+  WorkspaceID:
+    Type: String
+    Description: 'ChatGPT Enterprise Workspace ID'
+    NoEcho: true
+  
+  BackupSchedule:
+    Type: String
+    Description: 'Cron expression for backup schedule (default: daily at 2 AM UTC)'
+    Default: 'cron(0 2 * * ? *)'
+  
+  S3BucketName:
+    Type: String
+    Description: 'Name for the S3 bucket (must be globally unique)'
+    Default: 'openai-compliance-backup'
+
+Resources:
+  # S3 Bucket for storing conversation backups
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${S3BucketName}-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: 'DeleteIncompleteMultipartUploads'
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+          - Id: 'TransitionToIA'
+            Status: Enabled
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30
+          - Id: 'TransitionToGlacier'
+            Status: Enabled
+            Transitions:
+              - StorageClass: GLACIER
+                TransitionInDays: 90
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # IAM Role for Lambda Function
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'OpenAIComplianceBackupRole-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3BackupPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub '${BackupBucket.Arn}/*'
+                  - !GetAtt BackupBucket.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*'
+
+  # CloudWatch Log Group for Lambda
+  BackupLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/openai-compliance-backup
+      RetentionInDays: 30
+
+  # Lambda Function
+  BackupLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: openai-compliance-backup
+      Runtime: python3.12
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 900  # 15 minutes
+      MemorySize: 512
+      Environment:
+        Variables:
+          OPENAI_API_KEY: !Ref OpenAIAPIKey
+          WORKSPACE_ID: !Ref WorkspaceID
+          S3_BUCKET_NAME: !Ref BackupBucket
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('Hello from Lambda! Deploy your code here.')
+              }
+
+  # EventBridge Rule for daily scheduling
+  BackupScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: OpenAIComplianceBackupSchedule
+      Description: 'Triggers OpenAI compliance backup daily'
+      ScheduleExpression: !Ref BackupSchedule
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt BackupLambdaFunction.Arn
+          Id: 'OpenAIBackupTarget'
+          Input: !Sub |
+            {
+              "source": "eventbridge",
+              "detail-type": "Scheduled Event",
+              "region": "${AWS::Region}",
+              "time": "{{ aws.events.event.ingestion-time }}"
+            }
+
+  # Permission for EventBridge to invoke Lambda
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref BackupLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt BackupScheduleRule.Arn
+
+  # CloudWatch Alarm for Lambda Errors
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: OpenAIBackupLambdaErrors
+      AlarmDescription: 'Alarm for Lambda function errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref BackupLambdaFunction
+      AlarmActions:
+        - !Ref SNSNotificationTopic
+
+  # CloudWatch Alarm for Lambda Duration
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: OpenAIBackupLambdaDuration
+      AlarmDescription: 'Alarm for Lambda function duration (approaching timeout)'
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 800000  # 800 seconds (close to 900s timeout)
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref BackupLambdaFunction
+      AlarmActions:
+        - !Ref SNSNotificationTopic
+
+  # SNS Topic for notifications
+  SNSNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: OpenAIBackupNotifications
+      DisplayName: 'OpenAI Compliance Backup Notifications'
+
+Outputs:
+  S3BucketName:
+    Description: 'Name of the S3 bucket for backups'
+    Value: !Ref BackupBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-BackupBucket'
+
+  LambdaFunctionArn:
+    Description: 'ARN of the Lambda function'
+    Value: !GetAtt BackupLambdaFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunction'
+
+  LambdaFunctionName:
+    Description: 'Name of the Lambda function'
+    Value: !Ref BackupLambdaFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunctionName'
+
+  ScheduleRuleArn:
+    Description: 'ARN of the EventBridge rule'
+    Value: !GetAtt BackupScheduleRule.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ScheduleRule'
+
+  SNSTopicArn:
+    Description: 'ARN of the SNS notification topic'
+    Value: !Ref SNSNotificationTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-SNSTopic'

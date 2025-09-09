@@ -1,0 +1,32 @@
+{
+  "deployment": {
+    "stack_name": "openai-compliance-backup-stack",
+    "region": "us-east-1",
+    "s3_bucket_prefix": "openai-compliance-backup",
+    "backup_schedule": "cron(0 2 * * ? *)",
+    "lambda_timeout": 900,
+    "lambda_memory": 512,
+    "log_retention_days": 30
+  },
+  "openai_api": {
+    "base_url": "https://api.openai.com/v1",
+    "compliance_endpoint": "/organization/audit_logs",
+    "rate_limit_requests_per_minute": 60,
+    "max_retries": 3,
+    "timeout_seconds": 30
+  },
+  "s3_storage": {
+    "encryption": "AES256",
+    "storage_classes": {
+      "standard_to_ia_days": 30,
+      "ia_to_glacier_days": 90
+    },
+    "versioning": true
+  },
+  "monitoring": {
+    "cloudwatch_alarms": true,
+    "sns_notifications": true,
+    "error_threshold": 1,
+    "duration_threshold_percent": 90
+  }
+}
